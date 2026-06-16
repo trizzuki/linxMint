@@ -2,105 +2,180 @@ FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# ===== Install dependencies =====
-RUN apt-get update && apt-get install -y \
-    qemu-system-x86 \
-    qemu-utils \
-    novnc \
-    websockify \
-    wget \
-    curl \
-    net-tools \
-    unzip \
-    python3 \
-    procps \
-    sudo \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+# VM defaults
 
-# ===== Directories (NO VOLUME in Dockerfile!) =====
-RUN mkdir -p /data /iso /novnc
+ENV VM_RAM=16384
+ENV VM_CPUS=4
+ENV DISK_SIZE=200G
+ENV PORT=6080
 
-# ===== noVNC =====
-RUN wget https://github.com/novnc/noVNC/archive/refs/heads/master.zip -O /tmp/novnc.zip && \
-    unzip /tmp/novnc.zip -d /tmp && \
-    mv /tmp/noVNC-master/* /novnc && \
-    rm -rf /tmp/novnc.zip /tmp/noVNC-master
+# Windows ISO URL (override if desired)
 
-# ===== ISO =====
-ENV ISO_URL="https://go.microsoft.com/fwlink/p/?LinkID=2195280&clcid=0x409&culture=en-us&country=US"
+ENV ISO_URL="https://archive.org/download/windows-10-lite-edition-19h2-x64/Windows%2010%20Lite%20Edition%2019H2%20x64.iso"
 
-# ===== Start Script =====
-RUN printf '#!/bin/bash\n\
-set -e\n\
-\n\
-echo "===== QEMU + noVNC STARTING ====="\n\
-\n\
-# ===== Storage check (Railway Volume mount goes here) =====\n\
-mkdir -p /data /iso\n\
-\n\
-# ===== KVM detection =====\n\
-if [ -e /dev/kvm ]; then\n\
-  echo "KVM enabled"\n\
-  KVM=\"-enable-kvm\"\n\
-  CPU=\"host\"\n\
-  RAM=\"2G\"\n\
-  CORES=2\n\
-else\n\
-  echo "KVM not available"\n\
-  KVM=\"\"\n\
-  CPU=\"qemu64\"\n\
-  RAM=\"2G\"\n\
-  CORES=2\n\
-fi\n\
-\n\
-# ===== Download ISO =====\n\
-if [ ! -f /iso/os.iso ]; then\n\
-  echo "Downloading ISO..."\n\
-  wget -q "$ISO_URL" -O /iso/os.iso || echo "ISO download failed"\n\
-fi\n\
-\n\
-# ===== Disk (PERSISTENT via Railway Volume /data) =====\n\
-if [ ! -f /data/disk.qcow2 ]; then\n\
-  echo "Creating disk..."\n\
-  qemu-img create -f qcow2 /data/disk.qcow2 32G\n\
-fi\n\
-\n\
-# ===== Boot mode =====\n\
-BOOT=\"-boot order=c\"\n\
-if [ ! -s /data/disk.qcow2 ]; then\n\
-  BOOT=\"-boot order=d\"\n\
-fi\n\
-\n\
-echo "Starting QEMU..."\n\
-\n\
-qemu-system-x86_64 \\\n\
-  $KVM \\\n\
-  -machine q35 \\\n\
-  -cpu $CPU \\\n\
-  -m $RAM \\\n\
-  -smp $CORES \\\n\
-  -vga std \\\n\
-  -usb -device usb-tablet \\\n\
-  $BOOT \\\n\
-  -drive file=/data/disk.qcow2,format=qcow2 \\\n\
-  -drive file=/iso/os.iso,media=cdrom \\\n\
-  -netdev user,id=net0 \\\n\
-  -device e1000,netdev=net0 \\\n\
-  -vnc 0.0.0.0:0 \\\n\
-  -name "QEMU_VM" &\n\
-\n\
-sleep 5\n\
-echo "Starting noVNC..."\n\
-\n\
-websockify --web=/novnc 6080 localhost:5900 &\n\
-\n\
-echo "================================"\n\
-echo "Open: http://localhost:6080"\n\
-echo "================================"\n\
-\n\
-tail -f /dev/null\n' > /start.sh && chmod +x /start.sh
+RUN apt-get update && apt-get install -y --no-install-recommends 
+qemu-system-x86 
+qemu-utils 
+qemu-kvm 
+python3 
+git 
+wget 
+curl 
+unzip 
+procps 
+net-tools 
+ca-certificates 
+&& rm -rf /var/lib/apt/lists/*
 
-EXPOSE 6080 3389
+RUN mkdir -p /data /iso
+
+# Latest noVNC + websockify
+
+RUN git clone --depth=1 https://github.com/novnc/noVNC.git /novnc && 
+git clone --depth=1 https://github.com/novnc/websockify.git /opt/websockify
+
+RUN cat << 'EOF' > /start.sh
+#!/bin/bash
+set -e
+
+echo "========================================="
+echo "Starting Universal Windows VM"
+echo "========================================="
+
+# --------------------------------------------------
+
+# KVM Detection
+
+# --------------------------------------------------
+
+KVM_ENABLED=false
+
+if [ -c /dev/kvm ] && [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+KVM_ENABLED=true
+fi
+
+if [ "$KVM_ENABLED" = true ]; then
+echo "KVM detected"
+
+```
+ACCEL="-accel kvm"
+CPU="-cpu host"
+```
+
+else
+echo "KVM unavailable -> TCG mode"
+
+```
+ACCEL="-accel tcg,thread=multi"
+CPU="-cpu max"
+```
+
+fi
+
+# --------------------------------------------------
+
+# Resource Detection
+
+# --------------------------------------------------
+
+HOST_RAM=$(free -m | awk '/Mem:/ {print $2}')
+HOST_CPUS=$(nproc)
+
+TARGET_RAM=${VM_RAM:-16384}
+
+if [ "$HOST_RAM" -lt "$TARGET_RAM" ]; then
+TARGET_RAM=$((HOST_RAM * 75 / 100))
+fi
+
+TARGET_CPUS=${VM_CPUS:-4}
+
+if [ "$TARGET_CPUS" -gt "$HOST_CPUS" ]; then
+TARGET_CPUS=$HOST_CPUS
+fi
+
+echo "VM RAM  : ${TARGET_RAM} MB"
+echo "VM CPUs : ${TARGET_CPUS}"
+
+# --------------------------------------------------
+
+# ISO Download
+
+# --------------------------------------------------
+
+if [ ! -f /iso/os.iso ]; then
+echo "Downloading ISO..."
+wget -O /iso/os.iso "$ISO_URL"
+fi
+
+# --------------------------------------------------
+
+# Disk Creation
+
+# --------------------------------------------------
+
+if [ ! -f /data/disk.qcow2 ]; then
+echo "Creating ${DISK_SIZE} disk..."
+qemu-img create -f qcow2 /data/disk.qcow2 ${DISK_SIZE}
+fi
+
+# --------------------------------------------------
+
+# Boot Logic
+
+# --------------------------------------------------
+
+BOOT_ORDER="c"
+
+if [ ! -f /data/.installed ]; then
+BOOT_ORDER="d"
+fi
+
+# --------------------------------------------------
+
+# Start VM
+
+# --------------------------------------------------
+
+qemu-system-x86_64 
+$ACCEL 
+$CPU 
+-machine type=q35 
+-m ${TARGET_RAM}M 
+-smp ${TARGET_CPUS} 
+-vga std 
+-usb 
+-device usb-tablet 
+-boot order=${BOOT_ORDER},menu=on 
+-drive file=/data/disk.qcow2,format=qcow2 
+-drive file=/iso/os.iso,media=cdrom 
+-netdev user,id=net0,hostfwd=tcp::3389-:3389 
+-device e1000,netdev=net0 
+-display vnc=:0 
+-name Windows_VM &
+
+VM_PID=$!
+
+sleep 5
+
+python3 /opt/websockify/run 
+0.0.0.0:${PORT} 
+--web /novnc 
+localhost:5900 &
+
+echo ""
+echo "========================================="
+echo "VM READY"
+echo "========================================="
+echo "noVNC : Port ${PORT}"
+echo "RDP   : Port 3389"
+echo "========================================="
+
+wait $VM_PID
+EOF
+
+RUN chmod +x /start.sh
+
+EXPOSE 6080
+EXPOSE 3389
 
 CMD ["/start.sh"]
