@@ -87,7 +87,7 @@ qemu-system-x86_64 \\\n\
   -drive file=/iso/os.iso,media=cdrom \\\n\
   -netdev user,id=net0 \\\n\
   -device e1000,netdev=net0 \\\n\
-  -vnc :0 \\\n\
+  -vnc 0.0.0.0:0 \\\n\
   -name "QEMU_VM" &\n\
 \n\
 sleep 5\n\
