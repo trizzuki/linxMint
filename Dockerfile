@@ -2,9 +2,13 @@ FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV DISPLAY=:1
+ENV LANG=en_US.UTF-8
+ENV LC_ALL=en_US.UTF-8
 
 RUN apt-get update && apt-get install -y \
-    mate-desktop-environment-core \
+    ubuntu-desktop-minimal \
+    gnome-session \
+    gnome-terminal \
     tigervnc-standalone-server \
     tigervnc-common \
     novnc \
@@ -20,6 +24,7 @@ RUN apt-get update && apt-get install -y \
     procps \
     nano \
     locales \
+    && locale-gen en_US.UTF-8 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -32,25 +37,36 @@ WORKDIR /home/desktop
 
 RUN mkdir -p ~/.vnc
 
-# xstartup style Cinnamon (lebih stabil) tapi untuk MATE
-RUN printf '#!/bin/bash\n\
-xrdb $HOME/.Xresources\n\
-export XKL_XMODMAP_DISABLE=1\n\
-dbus-launch --exit-with-session mate-session\n' \
-> ~/.vnc/xstartup && \
-chmod +x ~/.vnc/xstartup
+# 🔥 GNOME xstartup FIXED
+RUN cat > ~/.vnc/xstartup << 'EOF'
+#!/bin/bash
 
-# VNC password cara stabil (sama seperti Cinnamon kamu)
+export XKL_XMODMAP_DISABLE=1
+export GNOME_SHELL_SESSION_MODE=ubuntu
+export XDG_CURRENT_DESKTOP=ubuntu:GNOME
+export DESKTOP_SESSION=ubuntu
+
+unset SESSION_MANAGER
+unset DBUS_SESSION_BUS_ADDRESS
+
+exec dbus-run-session gnome-session
+EOF
+
+RUN chmod +x ~/.vnc/xstartup
+
+# VNC password benar (stabil method)
 RUN printf 'desktop\n' | vncpasswd -f > ~/.vnc/passwd && \
-chmod 600 ~/.vnc/passwd
+    chmod 600 ~/.vnc/passwd
 
 USER root
 
 EXPOSE 5901
 EXPOSE 6080
 
+# 🔥 FIX: tambah delay + safety wait
 CMD bash -c '\
 rm -rf /tmp/.X1-lock /tmp/.X11-unix/X1; \
-su - desktop -c "vncserver :1 -geometry 1280x720 -depth 24"; \
-sleep 2; \
+su - desktop -c "vncserver :1 -localhost no -geometry 1280x720 -depth 24"; \
+sleep 3; \
+until ss -tln | grep 5901; do echo "waiting vnc..."; sleep 1; done; \
 websockify --web=/usr/share/novnc 6080 localhost:5901'
