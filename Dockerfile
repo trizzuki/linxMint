@@ -17,64 +17,81 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN mkdir -p /data /iso /novnc
 
-RUN wget https://github.com/novnc/noVNC/archive/refs/heads/master.zip -O /tmp/novnc.zip && \
+RUN wget -q https://github.com/novnc/noVNC/archive/refs/heads/master.zip -O /tmp/novnc.zip && \
     unzip /tmp/novnc.zip -d /tmp && \
     mv /tmp/noVNC-master/* /novnc && \
     rm -rf /tmp/novnc.zip /tmp/noVNC-master
 
-
+# ===== START SCRIPT =====
 RUN cat <<'EOF' > /start.sh
 #!/bin/bash
 set -e
 
-echo "Starting VM..."
+echo "=============================="
+echo " QEMU WINDOWS VM STARTING"
+echo "=============================="
 
-# FORCE TCG (lebih stabil di Railway)
-KVM_ARG=""
-CPU_ARG="qemu64"
-MEMORY="2G"
-SMP_CORES=1
-
-# ISO
-if [ ! -f "/iso/os.iso" ]; then
-  echo "Downloading ISO..."
-  wget -q --show-progress "$ISO_URL" -O "/iso/os.iso"
+# Detect KVM
+if [ -e /dev/kvm ]; then
+  echo "KVM ENABLED"
+  KVM="-enable-kvm"
+  CPU="host"
+  RAM="4G"
+  SMP="4"
+else
+  echo "KVM NOT AVAILABLE"
+  KVM=""
+  CPU="qemu64"
+  RAM="2G"
+  SMP="1"
 fi
 
-# Disk
-if [ ! -f "/data/disk.qcow2" ]; then
+# Download ISO
+if [ ! -f /iso/os.iso ]; then
+  echo "Downloading ISO..."
+  wget -O /iso/os.iso "$ISO_URL"
+fi
+
+# Create disk
+if [ ! -f /data/disk.qcow2 ]; then
   echo "Creating disk..."
-  qemu-img create -f qcow2 "/data/disk.qcow2" 40G
+  qemu-img create -f qcow2 /data/disk.qcow2 40G
 fi
 
 echo "Starting QEMU..."
 
 qemu-system-x86_64 \
-  -machine q35,accel=tcg \
-  -cpu $CPU_ARG \
-  -m $MEMORY \
-  -smp $SMP_CORES \
+  $KVM \
+  -machine q35,accel=kvm:tcg \
+  -cpu $CPU \
+  -m $RAM \
+  -smp $SMP \
   -vga std \
   -usb -device usb-tablet \
-  -vnc :0 \
   -drive file=/data/disk.qcow2,format=qcow2 \
   -drive file=/iso/os.iso,media=cdrom \
-  -netdev user,id=net0 \
-  -device e1000,netdev=net0 &
+  -boot order=d \
+  -netdev user,id=net0,hostfwd=tcp::3389-:3389 \
+  -device e1000,netdev=net0 \
+  -vnc :0 \
+  -daemonize
 
 echo "Starting noVNC..."
 
-websockify --web=/novnc 0.0.0.0:6080 localhost:5900 --ssl-only=false &
+websockify --web=/novnc 6080 localhost:5900 &
 
-echo "================================"
-echo "VNC: http://localhost:6080"
-echo "================================"
+echo ""
+echo "===================================="
+echo " VNC  : localhost:5900"
+echo " WEB  : http://localhost:6080/vnc.html"
+echo " RDP  : localhost:3389"
+echo "===================================="
 
 tail -f /dev/null
 EOF
 
 RUN chmod +x /start.sh
 
-EXPOSE 6080
+EXPOSE 6080 5900 3389
 
 CMD ["/start.sh"]
