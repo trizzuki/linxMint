@@ -17,83 +17,64 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN mkdir -p /data /iso /novnc
 
-# Install noVNC
 RUN wget https://github.com/novnc/noVNC/archive/refs/heads/master.zip -O /tmp/novnc.zip && \
     unzip /tmp/novnc.zip -d /tmp && \
     mv /tmp/noVNC-master/* /novnc && \
     rm -rf /tmp/novnc.zip /tmp/noVNC-master
 
-# Start script (FIXED using HEREDOC - no parse error)
+
 RUN cat <<'EOF' > /start.sh
 #!/bin/bash
 set -e
 
 echo "Starting VM..."
 
-# Detect KVM
-if [ -e /dev/kvm ]; then
-  echo "KVM available"
-  KVM_ARG="-enable-kvm"
-  CPU_ARG="host"
-  MEMORY="4G"
-  SMP_CORES=4
-else
-  echo "KVM not available (TCG mode)"
-  KVM_ARG=""
-  CPU_ARG="qemu64"
-  MEMORY="2G"
-  SMP_CORES=1
-fi
+# FORCE TCG (lebih stabil di Railway)
+KVM_ARG=""
+CPU_ARG="qemu64"
+MEMORY="2G"
+SMP_CORES=1
 
-# Download ISO if not exists
+# ISO
 if [ ! -f "/iso/os.iso" ]; then
   echo "Downloading ISO..."
   wget -q --show-progress "$ISO_URL" -O "/iso/os.iso"
 fi
 
-# Create disk if not exists
+# Disk
 if [ ! -f "/data/disk.qcow2" ]; then
   echo "Creating disk..."
-  qemu-img create -f qcow2 "/data/disk.qcow2" 100G
-fi
-
-# Boot logic
-BOOT_ORDER="-boot order=c,menu=on"
-if [ ! -s "/data/disk.qcow2" ] || [ $(stat -c%s "/data/disk.qcow2") -lt 1048576 ]; then
-  BOOT_ORDER="-boot order=d,menu=on"
+  qemu-img create -f qcow2 "/data/disk.qcow2" 40G
 fi
 
 echo "Starting QEMU..."
 
 qemu-system-x86_64 \
-  $KVM_ARG \
-  -machine q35,accel=kvm:tcg \
+  -machine q35,accel=tcg \
   -cpu $CPU_ARG \
   -m $MEMORY \
   -smp $SMP_CORES \
   -vga std \
   -usb -device usb-tablet \
-  $BOOT_ORDER \
+  -vnc :0 \
   -drive file=/data/disk.qcow2,format=qcow2 \
   -drive file=/iso/os.iso,media=cdrom \
-  -netdev user,id=net0,hostfwd=tcp::3389-:3389 \
-  -device e1000,netdev=net0 \
-  -display vnc=:0 \
-  -name "Windows10_VM" &
+  -netdev user,id=net0 \
+  -device e1000,netdev=net0 &
 
-sleep 5
-websockify --web /novnc 6080 localhost:5900 --ssl-only=false &
+echo "Starting noVNC..."
 
-echo "======================================"
-echo "VNC Web: http://localhost:6080"
-echo "RDP: localhost:3389"
-echo "======================================"
+websockify --web=/novnc 0.0.0.0:6080 localhost:5900 --ssl-only=false &
+
+echo "================================"
+echo "VNC: http://localhost:6080"
+echo "================================"
 
 tail -f /dev/null
 EOF
 
 RUN chmod +x /start.sh
 
-EXPOSE 6080 3389
+EXPOSE 6080
 
 CMD ["/start.sh"]
