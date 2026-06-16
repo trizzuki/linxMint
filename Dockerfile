@@ -2,9 +2,12 @@ FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV DISPLAY=:1
+ENV LANG=en_US.UTF-8
+ENV LANGUAGE=en_US:en
+ENV LC_ALL=en_US.UTF-8
 
 RUN apt-get update && apt-get install -y \
-    cinnamon-desktop-environment \
+    ubuntu-mate-desktop \
     tigervnc-standalone-server \
     tigervnc-common \
     novnc \
@@ -20,27 +23,36 @@ RUN apt-get update && apt-get install -y \
     procps \
     nano \
     locales \
+    && locale-gen en_US.UTF-8 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd -m -s /bin/bash desktop && \
     echo "desktop:desktop" | chpasswd && \
-    adduser desktop sudo
+    usermod -aG sudo desktop
 
 USER desktop
 WORKDIR /home/desktop
 
-RUN mkdir -p ~/.vnc
+RUN mkdir -p /home/desktop/.vnc
 
-RUN printf '#!/bin/bash\n\
-xrdb $HOME/.Xresources\n\
-export XKL_XMODMAP_DISABLE=1\n\
-dbus-launch --exit-with-session cinnamon-session\n' \
-> ~/.vnc/xstartup && \
-chmod +x ~/.vnc/xstartup
+RUN cat > /home/desktop/.vnc/xstartup << 'EOF'
+#!/bin/bash
 
-RUN printf 'desktop\n' | vncpasswd -f > ~/.vnc/passwd && \
-chmod 600 ~/.vnc/passwd
+unset SESSION_MANAGER
+unset DBUS_SESSION_BUS_ADDRESS
+
+export XDG_CURRENT_DESKTOP=MATE
+export DESKTOP_SESSION=mate
+export XKL_XMODMAP_DISABLE=1
+
+dbus-launch --exit-with-session mate-session
+EOF
+
+RUN chmod +x /home/desktop/.vnc/xstartup
+
+RUN printf 'desktop\n' | vncpasswd -f > /home/desktop/.vnc/passwd && \
+    chmod 600 /home/desktop/.vnc/passwd
 
 USER root
 
@@ -49,5 +61,9 @@ EXPOSE 6080
 
 CMD bash -c '\
 rm -rf /tmp/.X1-lock /tmp/.X11-unix/X1; \
-su - desktop -c "vncserver :1 -geometry 1280x720 -depth 24"; \
+su - desktop -c "vncserver :1 \
+-localhost no \
+-SecurityTypes None \
+-geometry 1280x720 \
+-depth 24"; \
 websockify --web=/usr/share/novnc 6080 localhost:5901'
