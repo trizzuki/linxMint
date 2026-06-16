@@ -82,7 +82,7 @@ qemu-system-x86_64 \
   -name "Windows10_VM" &
 
 sleep 5
-websockify --web /novnc 6080 localhost:5900 &
+websockify --web /novnc 6080 localhost:5900 --ssl-only=false &
 
 echo "======================================"
 echo "VNC Web: http://localhost:6080"
