@@ -13,20 +13,18 @@ ENV PORT=6080
 
 ENV ISO_URL="https://archive.org/download/windows-10-lite-edition-19h2-x64/Windows%2010%20Lite%20Edition%2019H2%20x64.iso"
 
-RUN apt-get update && apt-get install -y --no-install-recommends 
-qemu-system-x86 
-qemu-utils 
-qemu-kvm 
-python3 
-git 
-wget 
-curl 
-unzip 
-procps 
-net-tools 
-ca-certificates 
-&& rm -rf /var/lib/apt/lists/*
-
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    qemu-system-x86 \
+    qemu-utils \
+    novnc \
+    websockify \
+    wget \
+    curl \
+    net-tools \
+    unzip \
+    python3 \
+    && rm -rf /var/lib/apt/lists/*
+    
 RUN mkdir -p /data /iso
 
 # Latest noVNC + websockify
