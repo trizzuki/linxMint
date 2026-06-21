@@ -1,164 +1,53 @@
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV DISPLAY=:1
 
-# =========================
-# VM DEFAULTS (Railway-safe)
-# =========================
-ENV VM_RAM=2048
-ENV VM_CPUS=2
-ENV DISK_SIZE=40G
-ENV PORT=6080
-
-ENV ISO_URL="https://archive.org/download/windows-10-lite-edition-19h2-x64/Windows%2010%20Lite%20Edition%2019H2%20x64.iso"
-
-# =========================
-# INSTALL DEPENDENCIES
-# =========================
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    qemu-system-x86 \
-    qemu-utils \
+RUN apt-get update && apt-get install -y \
+    cinnamon-desktop-environment \
+    tigervnc-standalone-server \
+    tigervnc-common \
     novnc \
     websockify \
+    firefox \
+    dbus-x11 \
+    x11-xserver-utils \
+    xterm \
+    sudo \
     wget \
     curl \
     net-tools \
-    unzip \
-    python3 \
-    git \
     procps \
+    nano \
+    locales \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# =========================
-# DIRECTORIES (FIX REQUESTED)
-# =========================
-RUN mkdir -p /data /iso /novnc
+RUN useradd -m -s /bin/bash desktop && \
+    echo "desktop:desktop" | chpasswd && \
+    adduser desktop sudo
 
-# =========================
-# NOVNC + WEBSOCKIFY
-# =========================
-RUN git clone --depth=1 https://github.com/novnc/noVNC.git /novnc && \
-    git clone --depth=1 https://github.com/novnc/websockify.git /opt/websockify
+USER desktop
+WORKDIR /home/desktop
 
-# =========================
-# START SCRIPT
-# =========================
-RUN cat << 'EOF' > /start.sh
-#!/bin/bash
-set -e
+RUN mkdir -p ~/.vnc
 
-echo "========================================="
-echo " QEMU WINDOWS VM STARTING"
-echo "========================================="
+RUN printf '#!/bin/bash\n\
+xrdb $HOME/.Xresources\n\
+export XKL_XMODMAP_DISABLE=1\n\
+dbus-launch --exit-with-session cinnamon-session\n' \
+> ~/.vnc/xstartup && \
+chmod +x ~/.vnc/xstartup
 
-# =========================
-# ENSURE STORAGE EXISTS
-# =========================
-mkdir -p /data /iso
+RUN printf 'desktop\n' | vncpasswd -f > ~/.vnc/passwd && \
+chmod 600 ~/.vnc/passwd
 
-# =========================
-# KVM DETECTION
-# =========================
-if [ -e /dev/kvm ]; then
-    echo "KVM detected"
-    ACCEL="-enable-kvm"
-    CPU="-cpu host"
-else
-    echo "KVM not available (TCG mode)"
-    ACCEL=""
-    CPU="-cpu qemu64"
-fi
+USER root
 
-# =========================
-# SAFE RESOURCE LIMIT
-# =========================
-HOST_RAM=$(free -m | awk '/Mem:/ {print $2}')
-TARGET_RAM=${VM_RAM:-2048}
-
-if [ "$HOST_RAM" -lt "$TARGET_RAM" ]; then
-    TARGET_RAM=$((HOST_RAM * 70 / 100))
-fi
-
-TARGET_CPUS=${VM_CPUS:-2}
-HOST_CPUS=$(nproc)
-
-if [ "$TARGET_CPUS" -gt "$HOST_CPUS" ]; then
-    TARGET_CPUS=$HOST_CPUS
-fi
-
-echo "RAM  : ${TARGET_RAM} MB"
-echo "CPU  : ${TARGET_CPUS}"
-
-# =========================
-# ISO DOWNLOAD
-# =========================
-if [ ! -f /iso/os.iso ]; then
-    echo "Downloading ISO..."
-    wget -O /iso/os.iso "$ISO_URL" || echo "ISO download failed"
-fi
-
-# =========================
-# DISK CREATION
-# =========================
-if [ ! -f /data/disk.qcow2 ]; then
-    echo "Creating disk..."
-    qemu-img create -f qcow2 /data/disk.qcow2 ${DISK_SIZE}
-fi
-
-# =========================
-# BOOT MODE
-# =========================
-BOOT="c"
-if [ ! -f /data/.installed ]; then
-    BOOT="d"
-fi
-
-# =========================
-# START QEMU (FIXED)
-# =========================
-qemu-system-x86_64 \
-    $ACCEL \
-    $CPU \
-    -machine q35 \
-    -m ${TARGET_RAM}M \
-    -smp ${TARGET_CPUS} \
-    -vga std \
-    -usb -device usb-tablet \
-    -boot order=${BOOT},menu=on \
-    -drive file=/data/disk.qcow2,format=qcow2 \
-    -drive file=/iso/os.iso,media=cdrom \
-    -netdev user,id=net0,hostfwd=tcp::3389-:3389 \
-    -device e1000,netdev=net0 \
-    -vnc 0.0.0.0:0 \
-    -name Windows_VM &
-
-VM_PID=$!
-
-sleep 10
-
-echo "Starting noVNC..."
-
-python3 /opt/websockify/run \
-    0.0.0.0:${PORT} \
-    --web /novnc \
-    localhost:5900 &
-
-echo "========================================="
-echo " VM READY"
-echo "========================================="
-echo "noVNC : http://0.0.0.0:${PORT}"
-echo "RDP   : localhost:3389"
-echo "========================================="
-
-wait $VM_PID
-EOF
-
-RUN chmod +x /start.sh
-
-# =========================
-# PORTS
-# =========================
+EXPOSE 5901
 EXPOSE 6080
-EXPOSE 3389
 
-CMD ["/start.sh"]
+CMD bash -c '\
+rm -rf /tmp/.X1-lock /tmp/.X11-unix/X1; \
+su - desktop -c "vncserver :1 -geometry 1280x720 -depth 24"; \
+websockify --web=/usr/share/novnc 6080 localhost:5901'
